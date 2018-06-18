@@ -1,0 +1,42 @@
+<?php
+
+/**
+ * @file
+ * Installation/updating/uninstallation.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function ding_event_clone_schema() {
+  $schema['ding_event_clone_mapping'] = [
+    'fields' => [
+      'id' => [
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ],
+      'parent_nid' => [
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ],
+      'cloned_nids' => [
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+      ],
+      'rule' => [
+        'type' => 'text',
+        'not null' => TRUE,
+      ],
+    ],
+    'indexes' => [
+      'id' => ['id'],
+    ],
+    'primary key' => ['id'],
+  ];
+
+  return $schema;
+}

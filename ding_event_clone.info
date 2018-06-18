@@ -1,0 +1,6 @@
+name = Ding Event Clone and Repeat
+description = Enables new step on event node creation.
+core = 7.x
+package = Ding!
+project = ding_event_clone
+dependencies[] = date_repeat
