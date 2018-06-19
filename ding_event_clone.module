@@ -47,11 +47,10 @@ function ding_event_clone_dates_adding_form($form, &$form_state, $node) {
     ->condition('parent_nid', $node->nid)
     ->execute()
     ->fetchAll();
-  $a = 1;
 
   // Normalize date in relation to timezone.
-  $process_date = new DateObject($field_instance[0]['value'], new DateTimeZone($node->field_ding_event_date['und'][0]['timezone_db']));
-  $process_date->setTimezone(new DateTimeZone($node->field_ding_event_date['und'][0]['timezone']));
+  $process_date = new DateObject($field_instance[0]['value'], new DateTimeZone($node->field_ding_event_date[LANGUAGE_NONE][0]['timezone_db']));
+  $process_date->setTimezone(new DateTimeZone($node->field_ding_event_date[LANGUAGE_NONE][0]['timezone']));
   $date['value'] = date_format_date($process_date, 'custom', 'Y-m-d H:i');
 
   // Start describing form page.
@@ -86,11 +85,6 @@ function ding_event_clone_dates_adding_form($form, &$form_state, $node) {
     '#language' => LANGUAGE_NONE,
   ];
 
-  $form['dates_wrapper']['date']['show_repeat_settings'] = [
-    '#type' => 'hidden',
-    '#value' => 1,
-  ];
-
   $form['dates_wrapper']['parent1'] = [
     '#tree' => TRUE,
     'parent2' => [
@@ -108,6 +102,10 @@ function ding_event_clone_dates_adding_form($form, &$form_state, $node) {
         '#date_repeat_widget' => 'date_popup',
         '#date_flexible' => 0,
         '#date_repeat_collapsed' => TRUE,
+      ],
+      'show_repeat_settings' => [
+        '#type' => 'hidden',
+        '#value' => 1,
       ],
     ],
   ];
@@ -134,13 +132,14 @@ function ding_event_clone_dates_adding_form_submit($form, $form_state) {
 
   $rule = $form_state['values']['parent1']['parent2']['rrule'];
   $node = $form_state['values']['cloned_node'];
+  $field_name = 'field_ding_event_date';
 
   // Emulate date field.
-  $field = field_info_field('field_ding_event_date');
+  $field = field_info_field($field_name);
   $item = [
-    'value' => $form_state['values']['date'],
-    'value2' => $form_state['values']['date'],
-    'timezone' => $node->field_ding_event_date['und'][0]['timezone'],
+    'value' => $node->{$field_name}[LANGUAGE_NONE][0]['value'],
+    'value2' => $node->{$field_name}[LANGUAGE_NONE][0]['value2'],
+    'timezone' => $node->{$field_name}[LANGUAGE_NONE][0]['timezone'],
   ];
   $generated_dates = date_repeat_build_dates($rule, NULL, $field, $item);
 
@@ -149,14 +148,14 @@ function ding_event_clone_dates_adding_form_submit($form, $form_state) {
     $cloned_node = _clone_node_prepare($node, FALSE);
 
     // Process date, so it is inserted with correct timezone.
-    $process_date = new DateObject($date['value'], new DateTimeZone($node->field_ding_event_date['und'][0]['timezone']));
+    $process_date = new DateObject($date['value'], new DateTimeZone($node->{$field_name}[LANGUAGE_NONE][0]['timezone']));
     $parsed_time = explode(':', $form_state['input']['date']['time']);
     $process_date->setTime($parsed_time[0], $parsed_time[1]);
-    $process_date->setTimezone(new DateTimeZone($node->field_ding_event_date['und'][0]['timezone_db']));
+    $process_date->setTimezone(new DateTimeZone($node->{$field_name}[LANGUAGE_NONE][0]['timezone_db']));
     $date['value'] = date_format_date($process_date, 'custom', 'Y-m-d H:i');
 
-    $cloned_node->field_ding_event_date[LANGUAGE_NONE][0]['value'] = $date['value'];
-    $cloned_node->field_ding_event_date[LANGUAGE_NONE][0]['value2'] = $date['value'];
+    $cloned_node->{$field_name}[LANGUAGE_NONE][0]['value'] = $date['value'];
+    $cloned_node->{$field_name}[LANGUAGE_NONE][0]['value2'] = $date['value2'];
 
     try {
       node_save($cloned_node);
@@ -167,15 +166,11 @@ function ding_event_clone_dates_adding_form_submit($form, $form_state) {
 
     if (!empty($cloned_node->nid)) {
       try {
-        db_insert('ding_event_clone_mapping')
-          ->fields(
-            [
+        db_insert('ding_event_clone_mapping')->fields([
               'parent_nid' => $node->nid,
               'cloned_nids' => $cloned_node->nid,
               'rule' => $rule,
-            ]
-          )
-          ->execute();
+            ])->execute();
       }
       catch (Exception $exception) {
         drupal_set_message(t('Caught exception: @message', ['@message' => $exception->getMessage()]), 'error');
@@ -184,18 +179,8 @@ function ding_event_clone_dates_adding_form_submit($form, $form_state) {
       drupal_set_message(t('Event @node_title has been succesfully cloned.', ['@node_title' => $node->title]), 'status');
     }
   }
+  drupal_goto("admin/content");
 }
-
-//function _ding_event_clone_generate_dates($rule) {
-////  include_once DRUPAL_ROOT . '/' . drupal_get_path('module', 'date_repeat_field') . '/date_repeat_field.module';
-//
-//  module_load_include('module', 'date_repeat_field');
-//  $item = [];
-//  $dates = date_repeat_build_dates($rule, NULL, '', $item);
-//  var_dump($dates);die;
-//  $a = 1;
-//  return $dates;
-//}
 
 /**
  * Implements hook_form_FORM_ID_alter().
@@ -221,6 +206,7 @@ function ding_event_clone_form_ding_event_node_form_alter(&$form, &$form_state, 
  * @param $form_state
  */
 function ding_event_clone_submit($form, &$form_state) {
+  unset($_GET['destination']);
   drupal_goto('node/' . $form['#node']->nid . '/clone_event');
 }
 
@@ -230,22 +216,14 @@ function ding_event_clone_submit($form, &$form_state) {
 function ding_event_clone_node_delete($node) {
   if ($node->type == 'ding_event') {
     // Check if this node is a clone.
-    $query = db_select('ding_event_clone_mapping', 'map')
-      ->fields('map')
-      ->condition(db_or()
-        ->condition('parent_nid', $node->nid, '=')
-        ->condition('clone_nid', $node->nid, '='))
-      ->execute()
-      ->fetchAll();
+    $query = db_select('ding_event_clone_mapping', 'map')->fields('map')->condition(db_or()->condition('parent_nid', $node->nid)->condition('cloned_nids', $node->nid))->execute()->fetchAll();
 
     foreach ($query as $item) {
       if ($node->nid == $item->parent_nid) {
         node_delete($item->clone_nid);
       }
       else {
-        db_delete('ding_event_clone_mapping')
-          ->condition('id', $item->id)
-          ->execute();
+        db_delete('ding_event_clone_mapping')->condition('id', $item->id)->execute();
       }
     }
   }

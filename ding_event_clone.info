@@ -3,4 +3,4 @@ description = Enables new step on event node creation.
 core = 7.x
 package = Ding!
 project = ding_event_clone
-dependencies[] = date_repeat
+dependencies[] = date_repeat_field
