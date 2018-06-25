@@ -5,8 +5,6 @@
  * Event node clone functionality and processings.
  */
 
-//include_once DRUPAL_ROOT . '/' . drupal_get_path('module', 'date_repeat_field') . '/date_repeat_field.module';
-
 /**
  * Implements hook_menu().
  */
@@ -48,6 +46,11 @@ function ding_event_clone_dates_adding_form($form, &$form_state, $node) {
     ->execute()
     ->fetchAll();
 
+  $processed_rule = '';
+  if (!empty($rule)) {
+    $processed_rule = _ding_event_clone_parse_rule_string($rule[0]->rule);
+  }
+
   // Normalize date in relation to timezone.
   $process_date = new DateObject($field_instance[0]['value'], new DateTimeZone($node->field_ding_event_date[LANGUAGE_NONE][0]['timezone_db']));
   $process_date->setTimezone(new DateTimeZone($node->field_ding_event_date[LANGUAGE_NONE][0]['timezone']));
@@ -83,6 +86,8 @@ function ding_event_clone_dates_adding_form($form, &$form_state, $node) {
     '#bundle' => 'ding_event',
     '#date_is_default' => TRUE,
     '#language' => LANGUAGE_NONE,
+    '#disabled' => TRUE,
+    '#description' => t('Shows the parent node start date and time.'),
   ];
 
   $form['dates_wrapper']['parent1'] = [
@@ -93,7 +98,7 @@ function ding_event_clone_dates_adding_form($form, &$form_state, $node) {
       'rrule' => [
         '#type' => 'date_repeat_rrule',
         '#theme_wrappers' => ['date_repeat_rrule'],
-        '#default_value' => isset($rule[0]->rule) ? $rule[0]->rule : '',
+        '#default_value' => isset($processed_rule) ? $processed_rule : '',
         '#date_timezone' => date_default_timezone(),
         '#date_label_position' => 'above',
         '#date_format' => 'm/d/Y H:i',
@@ -130,53 +135,74 @@ function ding_event_clone_dates_adding_form_submit($form, $form_state) {
   module_load_include('module', 'date_repeat_field');
   module_load_include('inc', 'clone', 'clone.pages');
 
-  $rule = $form_state['values']['parent1']['parent2']['rrule'];
+  $rule = _ding_event_clone_parse_rule_string($form_state['values']['parent1']['parent2']['rrule'], 'submit');
+
   $node = $form_state['values']['cloned_node'];
   $field_name = 'field_ding_event_date';
 
   // Emulate date field.
   $field = field_info_field($field_name);
+
+  // Initialize variables related to date field.
+  $date_value = $node->{$field_name}[LANGUAGE_NONE][0]['value'];
+  $date_value2 = $node->{$field_name}[LANGUAGE_NONE][0]['value2'];
+  $date_timezone = $node->{$field_name}[LANGUAGE_NONE][0]['timezone'];
+  $date_timezone_db = $node->{$field_name}[LANGUAGE_NONE][0]['timezone_db'];
+
   $item = [
-    'value' => $node->{$field_name}[LANGUAGE_NONE][0]['value'],
-    'value2' => $node->{$field_name}[LANGUAGE_NONE][0]['value2'],
-    'timezone' => $node->{$field_name}[LANGUAGE_NONE][0]['timezone'],
+    'value' => $date_value,
+    'value2' => $date_value2,
+    'timezone' => $date_timezone,
   ];
+
+  // Generate repeated dates.
   $generated_dates = date_repeat_build_dates($rule, NULL, $field, $item);
 
   foreach ($generated_dates as $date) {
-    // Prepare node for cloning.
-    $cloned_node = _clone_node_prepare($node, FALSE);
+    if ($date['value'] != $item['value']) {
+      // Prepare node for cloning.
+      $cloned_node = _clone_node_prepare($node, FALSE);
 
-    // Process date, so it is inserted with correct timezone.
-    $process_date = new DateObject($date['value'], new DateTimeZone($node->{$field_name}[LANGUAGE_NONE][0]['timezone']));
-    $parsed_time = explode(':', $form_state['input']['date']['time']);
-    $process_date->setTime($parsed_time[0], $parsed_time[1]);
-    $process_date->setTimezone(new DateTimeZone($node->{$field_name}[LANGUAGE_NONE][0]['timezone_db']));
-    $date['value'] = date_format_date($process_date, 'custom', 'Y-m-d H:i');
+      // Process date, so it is inserted with correct timezone.
+      $process_date = new DateObject($date['value'], new DateTimeZone($date_timezone));
+      // Get time from "date" form field.
+      $get_time = explode(' ', $form_state['values']['date']);
+      $parsed_time = explode(':', $get_time[1]);
+      $process_date->setTime($parsed_time[0], $parsed_time[1]);
+      $process_date->setTimezone(new DateTimeZone($date_timezone_db));
+      $date['value'] = date_format_date($process_date, 'custom', 'Y-m-d H:i');
 
-    $cloned_node->{$field_name}[LANGUAGE_NONE][0]['value'] = $date['value'];
-    $cloned_node->{$field_name}[LANGUAGE_NONE][0]['value2'] = $date['value2'];
+      $cloned_node->{$field_name}[LANGUAGE_NONE][0]['value'] = $date['value'];
 
-    try {
-      node_save($cloned_node);
-    }
-    catch (Exception $exception) {
-      drupal_set_message(t('Caught exception: @message', ['@message' => $exception->getMessage()]), 'error');
-    }
-
-    if (!empty($cloned_node->nid)) {
-      try {
-        db_insert('ding_event_clone_mapping')->fields([
-          'parent_nid' => $node->nid,
-          'cloned_nids' => $cloned_node->nid,
-          'rule' => $rule,
-        ])->execute();
+      if ($date_value != $date_value2) {
+        $process_date = new DateObject($date['value2'], new DateTimeZone($date_timezone));
+        $process_date->setTimezone(new DateTimeZone($date_timezone_db));
+        $date['value2'] = date_format_date($process_date, 'custom', 'Y-m-d H:i');
+        $cloned_node->{$field_name}[LANGUAGE_NONE][0]['value2'] = $date['value2'];
       }
-      catch (Exception $exception) {
+      else {
+        $cloned_node->{$field_name}[LANGUAGE_NONE][0]['value2'] = $date['value'];
+      }
+
+      try {
+        node_save($cloned_node);
+      } catch (Exception $exception) {
         drupal_set_message(t('Caught exception: @message', ['@message' => $exception->getMessage()]), 'error');
       }
 
-      drupal_set_message(t('Event @node_title has been succesfully cloned.', ['@node_title' => $node->title]), 'status');
+      if (!empty($cloned_node->nid)) {
+        try {
+          db_insert('ding_event_clone_mapping')->fields([
+            'parent_nid' => $node->nid,
+            'cloned_nids' => $cloned_node->nid,
+            'rule' => $rule,
+          ])->execute();
+        } catch (Exception $exception) {
+          drupal_set_message(t('Caught exception: @message', ['@message' => $exception->getMessage()]), 'error');
+        }
+
+        drupal_set_message(t('Event @node_title has been successfully cloned.', ['@node_title' => $node->title]), 'status');
+      }
     }
   }
   drupal_goto('admin/content');
@@ -201,13 +227,58 @@ function ding_event_clone_form_ding_event_node_form_alter(&$form, &$form_state, 
  * Submit callback.
  *
  * Redirects form action to given URL.
- *
- * @param $form
- * @param $form_state
  */
 function ding_event_clone_submit($form, &$form_state) {
   unset($_GET['destination']);
   drupal_goto('node/' . $form['#node']->nid . '/clone_event');
+}
+
+/**
+ * Helper function to process changes od repeats count.
+ *
+ * @param string $rule
+ *   Rule string generated by date repeat iCal API.
+ * @param string $op
+ *   On which stage we are calling this function.
+ *
+ * @return string
+ *   New string.
+ */
+function _ding_event_clone_parse_rule_string($rule, $op = NULL) {
+  $complex_rule = preg_split('/\n|\r\n?/', $rule);
+  $rrule_rrule = explode(':', $complex_rule[0]);
+  $rrule_options = explode(';', $rrule_rrule[1]);
+
+  $rrule_options_array = [];
+  foreach ($rrule_options as $rrule_option) {
+    $opts = explode('=', $rrule_option);
+    $rrule_options_array[$opts[0]] = $opts[1];
+  }
+
+  /*
+   * Because this form was initially done as field, it also generates a date for
+   * original event and we must increment items count in order to have
+   * possibility to exclude original node date on node cloning.
+   */
+  if ($op == 'submit') {
+    $rrule_options_array['COUNT'] = $rrule_options_array['COUNT'] + 1;
+  }
+  else {
+    $rrule_options_array['COUNT'] = $rrule_options_array['COUNT'] - 1;
+  }
+
+  $output = implode(';', array_map(
+    function ($v, $k) {
+      return sprintf("%s=%s", $k, $v);
+    },
+    $rrule_options_array,
+    array_keys($rrule_options_array)
+  ));
+
+  $complex_rule[0] = $rrule_rrule[0] . ':' . $output;
+  $rule_string = implode("\r\n", $complex_rule);
+
+  return $rule_string;
 }
 
 /**
@@ -219,16 +290,18 @@ function ding_event_clone_node_delete($node) {
     $query = db_select('ding_event_clone_mapping', 'map')
       ->fields('map')
       ->condition(db_or()
-      ->condition('parent_nid', $node->nid)
-      ->condition('cloned_nids', $node->nid))
+        ->condition('parent_nid', $node->nid)
+        ->condition('cloned_nids', $node->nid))
       ->execute()->fetchAll();
 
     foreach ($query as $item) {
       if ($node->nid == $item->parent_nid) {
-        node_delete($item->clone_nid);
+        node_delete($item->cloned_nids);
       }
       else {
-        db_delete('ding_event_clone_mapping')->condition('id', $item->id)->execute();
+        db_delete('ding_event_clone_mapping')
+          ->condition('id', $item->id)
+          ->execute();
       }
     }
   }
